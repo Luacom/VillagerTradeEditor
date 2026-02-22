@@ -1,0 +1,14 @@
+# Minecraft 村民交易物品配置文件
+# 格式：分类, 英文ID, 中文名, 默认Damage值
+# 以 # 开头的行是注释，不会被读取
+
+基础, minecraft:air, 空气, 0
+矿物, minecraft:emerald, 绿宝石, 0
+矿物, minecraft:diamond, 钻石, 0
+矿物, minecraft:iron_ingot, 铁锭, 0
+矿物, minecraft:gold_ingot, 金锭, 0
+武器, minecraft:iron_sword, 铁剑, 32767
+武器, minecraft:diamond_sword, 钻石剑, 32767
+食物, minecraft:bread, 面包, 0
+食物, minecraft:apple, 苹果, 0
+方块, minecraft:chest, 箱子, 0
