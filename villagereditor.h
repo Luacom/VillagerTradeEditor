@@ -51,6 +51,7 @@ struct ItemMapping {
     QString chineseName;
     int defaultDamage;
     QString category;  // <== 新增分类字段
+    QString presetJson;  // 新增
 };
 
 // ==================== UI 控件组映射 ====================
@@ -119,7 +120,7 @@ private:
 
     // 物品选择器辅助
     QList<ItemMapping> buildItemMappingList();
-    QString selectItemFromDialog(int &outDamage);
+    QString selectItemFromDialog(int &outDamage, QString &outPresetJson);
 
     // 控件与状态
     QTableWidget *m_tradeTable;

@@ -35,7 +35,6 @@ struct ItemData {
     // 新增：自定义 NBT 节点
     bool enableCustom = false;
     QJsonArray customNodes;   // 存储自定义节点数组，每个元素是完整的 {name,value,type}
-    QJsonArray tagCustomNodes;   // 新增：存储 tag 内部的自定义子节点
 };
 
 struct TradeOption {
@@ -44,7 +43,7 @@ struct TradeOption {
     ItemData sell;
     int uses = 0;
     int maxUses = 12;
-    int tier = 1;
+    int tier = 0;
 };
 
 struct ItemMapping {
@@ -52,6 +51,7 @@ struct ItemMapping {
     QString chineseName;
     int defaultDamage;
     QString category;  // <== 新增分类字段
+    QString defaultNbt;   // 新增：默认 NBT 数组的 JSON 字符串
 };
 
 // ==================== UI 控件组映射 ====================
@@ -98,7 +98,6 @@ private slots:
     void openItemSelector(ItemWidgets *widgets);
 
 private:
-    QJsonObject buildMergedTagNbt(const ItemData &data);
     bool validateCustomNodes() const;  // 新增：验证所有自定义节点是否有效
     void initUI();
     QGroupBox* createItemSection(const QString &title, ItemWidgets &widgets);
@@ -121,7 +120,7 @@ private:
 
     // 物品选择器辅助
     QList<ItemMapping> buildItemMappingList();
-    QString selectItemFromDialog(int &outDamage);
+    ItemMapping selectItemFromDialog(const QList<ItemMapping> &items);
 
     // 控件与状态
     QTableWidget *m_tradeTable;

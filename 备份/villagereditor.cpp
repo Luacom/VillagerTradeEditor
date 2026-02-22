@@ -192,10 +192,22 @@ QGroupBox* VillagerEditor::createItemSection(const QString &title, ItemWidgets &
 
     // 绑定物品选择按钮
     connect(w.btnSelect, &QPushButton::clicked, this, [this, &w]() { openItemSelector(&w); });
-    // 连接复选框显示/隐藏编辑框并触发数据变化
+    // 连接自定义节点复选框的切换事件
     connect(w.cbEnableCustom, &QCheckBox::toggled, this, [this, &w](bool checked) {
+        // 当自定义节点启用时，禁用并取消勾选其他三个复选框
+        w.cbEnableName->setEnabled(!checked);
+        w.cbEnableLore->setEnabled(!checked);
+        w.cbEnableEnch->setEnabled(!checked);
+
+        if (checked) {
+            w.cbEnableName->setChecked(false);
+            w.cbEnableLore->setChecked(false);
+            w.cbEnableEnch->setChecked(false);
+        }
+
+        // 显示/隐藏自定义编辑框
         w.teCustom->setVisible(checked);
-        onDataChanged();
+        onDataChanged();   // 触发数据更新
     });
     // 连接文本变化
     connect(w.teCustom, &QTextEdit::textChanged, this, &VillagerEditor::onDataChanged);
@@ -224,26 +236,41 @@ void VillagerEditor::populateUIFromData(const TradeOption &trade)
 {
     m_isUpdatingUI = true; // 锁定，防止触发 onChange
 
-    auto fillItem = [](ItemWidgets &w, const ItemData &d) {
+    auto fillItem = [this](ItemWidgets &w, const ItemData &d) {
         w.leName->setText(d.name);
         w.sbCount->setValue(d.count);
         w.sbDamage->setValue(d.damage);
 
-        w.cbEnableName->setChecked(d.enableName);
+        // 如果启用了自定义节点，则强制禁用并取消勾选内置 Tag 复选框
+        if (d.enableCustom) {
+            w.cbEnableName->setChecked(false);
+            w.cbEnableLore->setChecked(false);
+            w.cbEnableEnch->setChecked(false);
+            w.cbEnableName->setEnabled(false);
+            w.cbEnableLore->setEnabled(false);
+            w.cbEnableEnch->setEnabled(false);
+        } else {
+            w.cbEnableName->setChecked(d.enableName);
+            w.cbEnableLore->setChecked(d.enableLore);
+            w.cbEnableEnch->setChecked(d.enableEnch);
+            w.cbEnableName->setEnabled(true);
+            w.cbEnableLore->setEnabled(true);
+            w.cbEnableEnch->setEnabled(true);
+        }
+
+        // 设置显示文本（即使被禁用也保留内容）
         w.leDisp->setText(d.displayName);
-        w.leDisp->setVisible(d.enableName);
-
-        w.cbEnableLore->setChecked(d.enableLore);
         w.leLore->setText(d.lore);
-        w.leLore->setVisible(d.enableLore);
-
-        w.cbEnableEnch->setChecked(d.enableEnch);
         w.sbEnchId->setValue(d.enchId);
         w.sbEnchLvl->setValue(d.enchLevel);
-        w.sbEnchId->setVisible(d.enableEnch);
-        w.sbEnchLvl->setVisible(d.enableEnch);
 
-        // 新增：自定义节点
+        // 根据复选框状态控制输入框可见性
+        w.leDisp->setVisible(w.cbEnableName->isChecked());
+        w.leLore->setVisible(w.cbEnableLore->isChecked());
+        w.sbEnchId->setVisible(w.cbEnableEnch->isChecked());
+        w.sbEnchLvl->setVisible(w.cbEnableEnch->isChecked());
+
+        // 自定义节点本身
         w.cbEnableCustom->setChecked(d.enableCustom);
         if (d.enableCustom) {
             QJsonDocument doc(d.customNodes);

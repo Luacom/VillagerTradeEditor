@@ -93,7 +93,7 @@ void VillagerEditor::initUI()
     m_sbMaxUses = new QSpinBox(this); m_sbMaxUses->setRange(1, 999);
     baseAttrLayout->addWidget(m_sbMaxUses);
     baseAttrLayout->addWidget(new QLabel("购买等级(Tier):"));
-    m_sbTier = new QSpinBox(this); m_sbTier->setRange(0, 5); m_sbTier->setValue(1);
+    m_sbTier = new QSpinBox(this); m_sbTier->setRange(0, 5); m_sbTier->setValue(0);
     baseAttrLayout->addWidget(m_sbTier);
     baseAttrLayout->addStretch();
     mainLayout->addWidget(baseAttrGroup);
@@ -192,10 +192,22 @@ QGroupBox* VillagerEditor::createItemSection(const QString &title, ItemWidgets &
 
     // 绑定物品选择按钮
     connect(w.btnSelect, &QPushButton::clicked, this, [this, &w]() { openItemSelector(&w); });
-    // 连接复选框显示/隐藏编辑框并触发数据变化
+    // 连接自定义节点复选框的切换事件
     connect(w.cbEnableCustom, &QCheckBox::toggled, this, [this, &w](bool checked) {
+        // 当自定义节点启用时，禁用并取消勾选其他三个复选框
+        w.cbEnableName->setEnabled(!checked);
+        w.cbEnableLore->setEnabled(!checked);
+        w.cbEnableEnch->setEnabled(!checked);
+
+        if (checked) {
+            w.cbEnableName->setChecked(false);
+            w.cbEnableLore->setChecked(false);
+            w.cbEnableEnch->setChecked(false);
+        }
+
+        // 显示/隐藏自定义编辑框
         w.teCustom->setVisible(checked);
-        onDataChanged();
+        onDataChanged();   // 触发数据更新
     });
     // 连接文本变化
     connect(w.teCustom, &QTextEdit::textChanged, this, &VillagerEditor::onDataChanged);
@@ -224,26 +236,41 @@ void VillagerEditor::populateUIFromData(const TradeOption &trade)
 {
     m_isUpdatingUI = true; // 锁定，防止触发 onChange
 
-    auto fillItem = [](ItemWidgets &w, const ItemData &d) {
+    auto fillItem = [this](ItemWidgets &w, const ItemData &d) {
         w.leName->setText(d.name);
         w.sbCount->setValue(d.count);
         w.sbDamage->setValue(d.damage);
 
-        w.cbEnableName->setChecked(d.enableName);
+        // 如果启用了自定义节点，则强制禁用并取消勾选内置 Tag 复选框
+        if (d.enableCustom) {
+            w.cbEnableName->setChecked(false);
+            w.cbEnableLore->setChecked(false);
+            w.cbEnableEnch->setChecked(false);
+            w.cbEnableName->setEnabled(false);
+            w.cbEnableLore->setEnabled(false);
+            w.cbEnableEnch->setEnabled(false);
+        } else {
+            w.cbEnableName->setChecked(d.enableName);
+            w.cbEnableLore->setChecked(d.enableLore);
+            w.cbEnableEnch->setChecked(d.enableEnch);
+            w.cbEnableName->setEnabled(true);
+            w.cbEnableLore->setEnabled(true);
+            w.cbEnableEnch->setEnabled(true);
+        }
+
+        // 设置显示文本（即使被禁用也保留内容）
         w.leDisp->setText(d.displayName);
-        w.leDisp->setVisible(d.enableName);
-
-        w.cbEnableLore->setChecked(d.enableLore);
         w.leLore->setText(d.lore);
-        w.leLore->setVisible(d.enableLore);
-
-        w.cbEnableEnch->setChecked(d.enableEnch);
         w.sbEnchId->setValue(d.enchId);
         w.sbEnchLvl->setValue(d.enchLevel);
-        w.sbEnchId->setVisible(d.enableEnch);
-        w.sbEnchLvl->setVisible(d.enableEnch);
 
-        // 新增：自定义节点
+        // 根据复选框状态控制输入框可见性
+        w.leDisp->setVisible(w.cbEnableName->isChecked());
+        w.leLore->setVisible(w.cbEnableLore->isChecked());
+        w.sbEnchId->setVisible(w.cbEnableEnch->isChecked());
+        w.sbEnchLvl->setVisible(w.cbEnableEnch->isChecked());
+
+        // 自定义节点本身
         w.cbEnableCustom->setChecked(d.enableCustom);
         if (d.enableCustom) {
             QJsonDocument doc(d.customNodes);
@@ -284,7 +311,6 @@ void VillagerEditor::syncDataFromUI()
         d.enchId = w.sbEnchId->value();
         d.enchLevel = w.sbEnchLvl->value();
         // 新增：自定义节点
-        // 新增：自定义节点
         d.enableCustom = w.cbEnableCustom->isChecked();
         if (d.enableCustom) {
             QString customText = w.teCustom->toPlainText().trimmed();
@@ -292,35 +318,9 @@ void VillagerEditor::syncDataFromUI()
                 QJsonParseError err;
                 QJsonDocument doc = QJsonDocument::fromJson(customText.toUtf8(), &err);
                 if (err.error == QJsonParseError::NoError && doc.isArray()) {
-                    QJsonArray customArray = doc.array();
-                    QJsonArray otherNodes;
-                    QJsonArray tagSubNodes; // 用于收集tag内部子节点
-                    for (const QJsonValue &cv : customArray) {
-                        if (cv.isObject()) {
-                            QJsonObject obj = cv.toObject();
-                            QString name = obj.value("name").toString();
-                            if (name == "tag" && obj.value("value").isArray()) {
-                                // 提取tag内部的子节点
-                                QJsonArray tagInner = obj.value("value").toArray();
-                                for (const QJsonValue &tv : tagInner) {
-                                    if (tv.isObject()) tagSubNodes.append(tv);
-                                }
-                            } else {
-                                otherNodes.append(obj);
-                            }
-                        }
-                    }
-                    d.customNodes = otherNodes;
-                    // 合并 tagSubNodes 到现有的 tagCustomNodes
-                    if (!tagSubNodes.isEmpty()) {
-                        QJsonArray mergedTagInner = d.tagCustomNodes;
-                        for (const QJsonValue &v : tagSubNodes) {
-                            mergedTagInner.append(v);
-                        }
-                        d.tagCustomNodes = mergedTagInner;
-                    }
+                    d.customNodes = doc.array();
                 } else {
-                    d.customNodes = QJsonArray();
+                    d.customNodes = QJsonArray(); // 解析失败则清空
                 }
             } else {
                 d.customNodes = QJsonArray();
@@ -412,97 +412,72 @@ void VillagerEditor::updateTradeTable()
     m_isUpdatingUI = false;
 }
 
-// 物品选择器
-void VillagerEditor::openItemSelector(ItemWidgets *widgets)
-{
-    int damage = 0;
-    QString itemName = selectItemFromDialog(damage);
-    if (!itemName.isEmpty()) {
-        widgets->leName->setText(itemName);
-        widgets->sbDamage->setValue(damage);
-        if (widgets->sbCount->value() == 0) widgets->sbCount->setValue(1);
-    }
-}
-
-QString VillagerEditor::selectItemFromDialog(int &outDamage)
+ItemMapping VillagerEditor::selectItemFromDialog(const QList<ItemMapping> &items)
 {
     QDialog dialog(this);
     dialog.setWindowTitle("选择物品");
     dialog.setModal(true);
-    dialog.resize(500, 550); // 稍微加宽一点以显示分类
+    dialog.resize(500, 550);
 
     QVBoxLayout vLayout(&dialog);
 
-    // ========== 1. 顶部搜索与分类区 ==========
+    // 顶部搜索与分类区
     QHBoxLayout hLayout;
-
     QComboBox *categoryCombo = new QComboBox(&dialog);
-    categoryCombo->addItem("全部"); // 默认选项
+    categoryCombo->addItem("全部");
 
     QLineEdit searchEdit(&dialog);
     searchEdit.setPlaceholderText("搜索物品(中/英文)...");
 
-    // 设置下拉框和搜索框比例为 1:2
     hLayout.addWidget(categoryCombo, 1);
     hLayout.addWidget(&searchEdit, 2);
     vLayout.addLayout(&hLayout);
 
-    // ========== 2. 物品列表加载 ==========
+    // 物品列表
     QListWidget itemList(&dialog);
-    QList<ItemMapping> items = loadItemMappings();
 
     QStringList categories;
     for (const auto &mapping : items) {
-        // 收集不重复的分类用于填充下拉框
         if (!categories.contains(mapping.category)) {
             categories.append(mapping.category);
         }
 
-        // UI 显示格式：[矿物] 绿宝石（minecraft:emerald）
-        QListWidgetItem *item = new QListWidgetItem(QString("[%1] %2（%3）")
-                                                        .arg(mapping.category, mapping.chineseName, mapping.englishId));
-
-        // 绑定隐藏数据
-        item->setData(Qt::UserRole, mapping.englishId);
-        item->setData(Qt::UserRole + 1, mapping.defaultDamage);
-        item->setData(Qt::UserRole + 2, mapping.category); // 存入分类名，用于过滤
-
+        QListWidgetItem *item = new QListWidgetItem(
+            QString("[%1] %2（%3）")
+                .arg(mapping.category, mapping.chineseName, mapping.englishId)
+            );
+        item->setData(Qt::UserRole, mapping.englishId);      // 用于查找
+        item->setData(Qt::UserRole + 1, mapping.category);   // 用于分类过滤
         itemList.addItem(item);
     }
 
     categoryCombo->addItems(categories);
     vLayout.addWidget(&itemList);
 
-    // ========== 3. 双重过滤逻辑 (分类 + 搜索) ==========
+    // 过滤逻辑
     auto filterItems = [&]() {
         QString searchText = searchEdit.text();
         QString selectedCategory = categoryCombo->currentText();
 
         for (int i = 0; i < itemList.count(); ++i) {
             QListWidgetItem *item = itemList.item(i);
-            QString itemCategory = item->data(Qt::UserRole + 2).toString();
+            QString itemCategory = item->data(Qt::UserRole + 1).toString();
             QString itemText = item->text();
 
-            // 条件1：分类匹配（或是选择了"全部"）
             bool categoryMatch = (selectedCategory == "全部" || selectedCategory == itemCategory);
-            // 条件2：搜索文本匹配
             bool textMatch = itemText.contains(searchText, Qt::CaseInsensitive);
-
-            // 只有同时满足分类和搜索词才显示
             item->setHidden(!(categoryMatch && textMatch));
         }
     };
 
-    // 搜索框输入和下拉框选择改变时，都触发过滤
     connect(&searchEdit, &QLineEdit::textChanged, filterItems);
     connect(categoryCombo, &QComboBox::currentTextChanged, filterItems);
 
-    // ========== 4. 确认与取消逻辑 ==========
+    // 确认/取消
     QString selectedId;
     auto onSelect = [&]() {
         if (QListWidgetItem *item = itemList.currentItem()) {
             selectedId = item->data(Qt::UserRole).toString();
-            outDamage = item->data(Qt::UserRole + 1).toInt();
             dialog.accept();
         }
     };
@@ -517,10 +492,14 @@ QString VillagerEditor::selectItemFromDialog(int &outDamage)
 
     connect(&btnConfirm, &QPushButton::clicked, onSelect);
     connect(&btnCancel, &QPushButton::clicked, &dialog, &QDialog::reject);
-    connect(&itemList, &QListWidget::itemDoubleClicked, onSelect); // 双击直接选择
+    connect(&itemList, &QListWidget::itemDoubleClicked, onSelect);
 
-    dialog.exec();
-    return selectedId;
+    if (dialog.exec() == QDialog::Accepted && !selectedId.isEmpty()) {
+        for (const auto &m : items) {
+            if (m.englishId == selectedId) return m;
+        }
+    }
+    return ItemMapping(); // 返回空映射表示未选择
 }
 
 // ==================== NBT 序列化与解析重构 ====================
@@ -554,39 +533,6 @@ QJsonObject VillagerEditor::buildTagNbt(const ItemData &data)
     return tagArr.isEmpty() ? QJsonObject() : createNode("tag", tagArr, 10);
 }
 
-QJsonObject VillagerEditor::buildMergedTagNbt(const ItemData &data)
-{
-    // 如果启用了任何 UI tag 功能，则忽略原有的 tagCustomNodes，只生成新的
-    if (data.enableName || data.enableLore || data.enableEnch) {
-        QJsonArray tagArr;
-        // 构建 display 节点
-        if (data.enableName || data.enableLore) {
-            QJsonArray displayArr;
-            if (data.enableName) displayArr.append(createNode("Name", data.displayName, 8));
-            if (data.enableLore) {
-                QJsonArray loreArr; loreArr.append(createNode("", data.lore, 8));
-                displayArr.append(createNode("Lore", loreArr, 9));
-            }
-            tagArr.append(createNode("display", displayArr, 10));
-        }
-        // 构建 ench 节点
-        if (data.enableEnch) {
-            QJsonArray enchInner;
-            enchInner.append(createNode("id", data.enchId, 2));
-            enchInner.append(createNode("lvl", data.enchLevel, 2));
-            QJsonArray enchList; enchList.append(createNode("", enchInner, 10));
-            tagArr.append(createNode("ench", enchList, 9));
-        }
-        return tagArr.isEmpty() ? QJsonObject() : createNode("tag", tagArr, 10);
-    }
-
-    // 否则，完全使用原有的 tagCustomNodes（不进行任何合并）
-    if (data.tagCustomNodes.isEmpty()) {
-        return QJsonObject();
-    }
-    return createNode("tag", data.tagCustomNodes, 10);
-}
-
 QJsonObject VillagerEditor::buildItemNbt(const QString &key, const ItemData &data)
 {
     QJsonArray arr;
@@ -595,7 +541,7 @@ QJsonObject VillagerEditor::buildItemNbt(const QString &key, const ItemData &dat
     arr.append(createNode("Name", data.name, 8));
     arr.append(createNode("WasPickedUp", 0, 1));
 
-    QJsonObject tag = buildMergedTagNbt(data);
+    QJsonObject tag = buildTagNbt(data);
     if (!tag.isEmpty()) arr.append(tag);
 
     // 追加自定义节点
@@ -680,18 +626,14 @@ ItemData VillagerEditor::parseItemData(const QJsonArray &arr)
             // 忽略，保持默认值
         }
         else if (n == "tag" && val.isArray()) {
-            // 将整个 tag 的 value 数组保存到 tagCustomNodes
-            item.tagCustomNodes = val.toArray();
-
-            // 同时解析 display 和 ench 用于 UI
+            // 原有 tag 解析保持不变
             QJsonArray tagArr = val.toArray();
             for (const QJsonValue &tv : tagArr) {
                 QJsonObject tobj = tv.toObject();
                 QString tn = tobj.value("name").toString();
 
                 if (tn == "display" && tobj.value("value").isArray()) {
-                    QJsonArray displayArr = tobj.value("value").toArray();
-                    for (const QJsonValue &dv : displayArr) {
+                    for (const QJsonValue &dv : tobj.value("value").toArray()) {
                         QJsonObject dobj = dv.toObject();
                         if (dobj.value("name").toString() == "Name") {
                             item.enableName = true;
@@ -714,10 +656,9 @@ ItemData VillagerEditor::parseItemData(const QJsonArray &arr)
                         }
                     }
                 }
-                // 其他子节点保留在 tagCustomNodes 中，不做额外处理
+                // 注意：tag 内部的其他节点不会单独处理，它们将保留在原有的 tag 节点中，不会丢失
             }
-            // 注意：不要将整个 tag 节点加入 customNodes，所以 continue，不要进入 else
-            }
+        }
         else {
             // 不是标准字段，则视为自定义节点，保留原样
             customNodes.append(obj);
@@ -846,21 +787,23 @@ void VillagerEditor::createDefaultItemConfig(const QString &path)
     QFile file(path);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&file);
-        out.setEncoding(QStringConverter::Utf8);  // 写入时 (out)
+        out.setEncoding(QStringConverter::Utf8);
         out << "# Minecraft 村民交易物品配置文件\n";
-        out << "# 格式：分类, 英文ID, 中文名, 默认Damage值\n";
+        out << "# 格式：分类, 英文ID, 中文名, 默认Damage, 默认NBT(JSON数组)\n";
+        out << "# 默认NBT列是可选的，若填写必须是一个JSON数组，且整个字段用双引号括起来，例如：\n";
+        out << "# 武器, minecraft:diamond_sword, 钻石剑, 32767, \"[{\\\"name\\\":\\\"ench\\\",\\\"value\\\":[{\\\"name\\\":\\\"\\\",\\\"value\\\":[{\\\"name\\\":\\\"id\\\",\\\"value\\\":9,\\\"type\\\":2},{\\\"name\\\":\\\"lvl\\\",\\\"value\\\":5,\\\"type\\\":2}],\\\"type\\\":10}],\\\"type\\\":9}]\"\n";
         out << "# 以 # 开头的行是注释，不会被读取\n\n";
 
-        out << "基础, minecraft:air, 空气, 0\n";
-        out << "矿物, minecraft:emerald, 绿宝石, 0\n";
-        out << "矿物, minecraft:diamond, 钻石, 0\n";
-        out << "矿物, minecraft:iron_ingot, 铁锭, 0\n";
-        out << "矿物, minecraft:gold_ingot, 金锭, 0\n";
-        out << "武器, minecraft:iron_sword, 铁剑, 32767\n";
-        out << "武器, minecraft:diamond_sword, 钻石剑, 32767\n";
-        out << "食物, minecraft:bread, 面包, 0\n";
-        out << "食物, minecraft:apple, 苹果, 0\n";
-        out << "方块, minecraft:chest, 箱子, 0\n";
+        out << "基础, minecraft:air, 空气, 0,\n";
+        out << "矿物, minecraft:emerald, 绿宝石, 0,\n";
+        out << "矿物, minecraft:diamond, 钻石, 0,\n";
+        out << "矿物, minecraft:iron_ingot, 铁锭, 0,\n";
+        out << "矿物, minecraft:gold_ingot, 金锭, 0,\n";
+        out << "武器, minecraft:iron_sword, 铁剑, 32767,\n";
+        out << "武器, minecraft:diamond_sword, 钻石剑, 32767, \"[{\\\"name\\\":\\\"ench\\\",\\\"value\\\":[{\\\"name\\\":\\\"\\\",\\\"value\\\":[{\\\"name\\\":\\\"id\\\",\\\"value\\\":9,\\\"type\\\":2},{\\\"name\\\":\\\"lvl\\\",\\\"value\\\":5,\\\"type\\\":2}],\\\"type\\\":10}],\\\"type\\\":9}]\"\n";
+        out << "食物, minecraft:bread, 面包, 0,\n";
+        out << "食物, minecraft:apple, 苹果, 0,\n";
+        out << "方块, minecraft:chest, 箱子, 0,\n";
         file.close();
     }
 }
@@ -869,30 +812,49 @@ void VillagerEditor::createDefaultItemConfig(const QString &path)
 QList<ItemMapping> VillagerEditor::loadItemMappings()
 {
     QList<ItemMapping> items;
-    // 配置文件存放在可执行文件同级目录
     QString path = QCoreApplication::applicationDirPath() + "/items_config.csv";
     QFile file(path);
 
-    // 如果文件不存在，则自动创建一个默认的
     if (!file.exists()) {
         createDefaultItemConfig(path);
     }
 
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
-        in.setEncoding(QStringConverter::Utf8);   // 读取时 (in)
+        in.setEncoding(QStringConverter::Utf8);
         while (!in.atEnd()) {
             QString line = in.readLine().trimmed();
-            // 跳过空行和注释
-            if (line.isEmpty() || line.startsWith("#")) continue;
+            if (line.isEmpty() || line.startsWith('#')) continue;
 
-            QStringList parts = line.split(",");
+            // 手动解析 CSV，处理引号
+            QStringList parts;
+            QString current;
+            bool inQuote = false;
+            for (QChar c : line) {
+                if (c == '"') {
+                    inQuote = !inQuote;          // 切换引号状态
+                } else if (c == ',' && !inQuote) {
+                    parts.append(current.trimmed());
+                    current.clear();
+                } else {
+                    current.append(c);
+                }
+            }
+            parts.append(current.trimmed());     // 最后一个字段
+
             if (parts.size() >= 4) {
                 ItemMapping mapping;
-                mapping.category = parts[0].trimmed();
-                mapping.englishId = parts[1].trimmed();
+                mapping.category    = parts[0].trimmed();
+                mapping.englishId   = parts[1].trimmed();
                 mapping.chineseName = parts[2].trimmed();
                 mapping.defaultDamage = parts[3].trimmed().toInt();
+                if (parts.size() >= 5) {
+                    mapping.defaultNbt = parts[4].trimmed();
+                    // 如果字段被引号包围，去除首尾引号
+                    if (mapping.defaultNbt.startsWith('"') && mapping.defaultNbt.endsWith('"')) {
+                        mapping.defaultNbt = mapping.defaultNbt.mid(1, mapping.defaultNbt.length() - 2);
+                    }
+                }
                 items.append(mapping);
             }
         }
@@ -902,6 +864,71 @@ QList<ItemMapping> VillagerEditor::loadItemMappings()
 }
 
 // 3. 核心功能：内置的配置文件文本编辑器
+void VillagerEditor::openItemSelector(ItemWidgets *widgets)
+{
+    QList<ItemMapping> items = loadItemMappings();
+    if (items.isEmpty()) {
+        QMessageBox::warning(this, "警告", "物品库为空，请先配置物品！");
+        return;
+    }
+
+    ItemMapping selected = selectItemFromDialog(items);
+    if (selected.englishId.isEmpty()) return;
+
+    m_isUpdatingUI = true; // 锁定 UI 更新
+
+    // 基础物品信息
+    widgets->leName->setText(selected.englishId);
+    widgets->sbDamage->setValue(selected.defaultDamage);
+    widgets->sbCount->setValue(1);
+
+    // 处理默认 NBT（第五列）
+    if (!selected.defaultNbt.isEmpty()) {
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(selected.defaultNbt.toUtf8(), &err);
+        if (err.error == QJsonParseError::NoError && doc.isArray()) {
+            widgets->teCustom->setPlainText(doc.toJson(QJsonDocument::Indented));
+            widgets->cbEnableCustom->setChecked(true); // 自动勾选，这会触发互斥逻辑
+        } else {
+            widgets->teCustom->clear();
+            widgets->cbEnableCustom->setChecked(false);
+        }
+    } else {
+        widgets->teCustom->clear();
+        widgets->cbEnableCustom->setChecked(false);
+    }
+
+    // 重置所有标准 Tag 字段
+    widgets->leDisp->clear();
+    widgets->cbEnableName->setChecked(false);
+    widgets->leLore->clear();
+    widgets->cbEnableLore->setChecked(false);
+    widgets->sbEnchId->setValue(0);
+    widgets->sbEnchLvl->setValue(1);
+    widgets->cbEnableEnch->setChecked(false);
+
+    m_isUpdatingUI = false;
+    onDataChanged(); // 触发数据同步
+}
+
+bool VillagerEditor::validateCustomNodes() const
+{
+    for (const TradeOption &trade : m_tradeOptions) {
+        // 检查三个物品的自定义节点
+        const ItemData* items[3] = { &trade.buyA, &trade.buyB, &trade.sell };
+        for (const ItemData* item : items) {
+            if (item->enableCustom) {
+                // 如果启用了自定义节点，但 customNodes 为空（解析失败或内容为空），则视为无效
+                if (item->customNodes.isEmpty()) {
+                    return false;
+                }
+                // 可选：进一步检查每个节点是否包含必要的字段，但通常 JSON 解析时已保证结构
+            }
+        }
+    }
+    return true;
+}
+
 void VillagerEditor::openItemConfigEditor()
 {
     QDialog dialog(this);
@@ -909,12 +936,11 @@ void VillagerEditor::openItemConfigEditor()
     dialog.resize(600, 500);
     QVBoxLayout layout(&dialog);
 
-    QLabel *helpLabel = new QLabel("<b>配置格式：</b> 分类, 英文ID, 中文名, Damage<br>"
-                                   "<b>示例：</b> <code>矿物, minecraft:emerald, 绿宝石, 0</code><br>"
+    QLabel *helpLabel = new QLabel("<b>配置格式：</b> 分类, 英文ID, 中文名, Damage, 默认NBT(JSON数组)<br>"
+                                   "<b>示例：</b> <code>矿物, minecraft:emerald, 绿宝石, 0,</code><br>"
                                    "<font color='gray'>修改后点击保存即可全局生效。你可以随时添加 Mod 物品。</font>", &dialog);
     layout.addWidget(helpLabel);
 
-    // 文本编辑区
     QTextEdit *editor = new QTextEdit(&dialog);
     editor->setStyleSheet("font-family: Consolas, monospace; font-size: 14px;");
 
@@ -926,7 +952,6 @@ void VillagerEditor::openItemConfigEditor()
     }
     layout.addWidget(editor);
 
-    // 底部按钮
     QHBoxLayout *btnLayout = new QHBoxLayout();
     QPushButton *btnSave = new QPushButton("保存并刷新", &dialog);
     QPushButton *btnCancel = new QPushButton("取消", &dialog);
@@ -935,16 +960,15 @@ void VillagerEditor::openItemConfigEditor()
     btnLayout->addWidget(btnCancel);
     layout.addLayout(btnLayout);
 
-    // 保存逻辑
     connect(btnSave, &QPushButton::clicked, [&]() {
-        if (file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-            QTextStream out(&file);
-            out.setEncoding(QStringConverter::Utf8);  // 写入时 (out)
+        QFile fileOut(path);
+        if (fileOut.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+            QTextStream out(&fileOut);
+            out.setEncoding(QStringConverter::Utf8);
             out << editor->toPlainText();
-            file.close();
+            fileOut.close();
 
-            // 保存后立刻刷新自动补全列表
-            updateCompleters();
+            updateCompleters(); // 刷新自动补全
 
             dialog.accept();
             QMessageBox::information(this, "成功", "物品库配置已更新并生效！");
@@ -955,20 +979,4 @@ void VillagerEditor::openItemConfigEditor()
     connect(btnCancel, &QPushButton::clicked, &dialog, &QDialog::reject);
 
     dialog.exec();
-}
-
-bool VillagerEditor::validateCustomNodes() const
-{
-    for (const TradeOption &trade : m_tradeOptions) {
-        const ItemData* items[3] = { &trade.buyA, &trade.buyB, &trade.sell };
-        for (const ItemData* item : items) {
-            if (item->enableCustom) {
-                // 只要 customNodes 或 tagCustomNodes 任一不为空，就视为有效
-                if (item->customNodes.isEmpty() && item->tagCustomNodes.isEmpty()) {
-                    return false;
-                }
-            }
-        }
-    }
-    return true;
 }

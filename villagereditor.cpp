@@ -11,6 +11,40 @@
 #include <QFile>
 #include <QHeaderView>
 
+// 解析 CSV 行，正确处理引号包围的字段
+static QList<QString> parseCsvLine(const QString &line) {
+    QList<QString> fields;
+    QString field;
+    bool inQuote = false;
+    int i = 0;
+    while (i < line.length()) {
+        QChar c = line[i];
+        if (c == '"' && !inQuote) {
+            // 进入引号模式
+            inQuote = true;
+        } else if (c == '"' && inQuote) {
+            // 可能是双引号转义或结束引号
+            if (i + 1 < line.length() && line[i + 1] == '"') {
+                // 连续两个双引号表示一个转义的双引号
+                field.append('"');
+                i++; // 跳过下一个双引号
+            } else {
+                // 结束引号
+                inQuote = false;
+            }
+        } else if (c == ',' && !inQuote) {
+            // 字段结束
+            fields.append(field);
+            field.clear();
+        } else {
+            field.append(c);
+        }
+        i++;
+    }
+    fields.append(field); // 添加最后一个字段
+    return fields;
+}
+
 // 递归查找指定 name 的 NBT 数组节点，无视嵌套深度
 static QJsonArray findNbtArray(const QJsonArray &arr, const QString &targetName) {
     for (const QJsonValue &v : arr) {
@@ -416,15 +450,23 @@ void VillagerEditor::updateTradeTable()
 void VillagerEditor::openItemSelector(ItemWidgets *widgets)
 {
     int damage = 0;
-    QString itemName = selectItemFromDialog(damage);
+    QString presetJson;   // 新增
+    QString itemName = selectItemFromDialog(damage, presetJson);   // 修改参数
     if (!itemName.isEmpty()) {
         widgets->leName->setText(itemName);
         widgets->sbDamage->setValue(damage);
         if (widgets->sbCount->value() == 0) widgets->sbCount->setValue(1);
+
+        // 如果存在预设 JSON，则自动勾选自定义节点并填充
+        if (!presetJson.isEmpty()) {
+            widgets->cbEnableCustom->setChecked(true);   // 这会触发关联的槽函数，自动禁用其他复选框
+            widgets->teCustom->setPlainText(presetJson);
+        }
+        // 注意：如果 presetJson 为空，我们不做任何操作，保持原有的自定义节点状态
     }
 }
 
-QString VillagerEditor::selectItemFromDialog(int &outDamage)
+QString VillagerEditor::selectItemFromDialog(int &outDamage, QString &outPresetJson)
 {
     QDialog dialog(this);
     dialog.setWindowTitle("选择物品");
@@ -466,6 +508,7 @@ QString VillagerEditor::selectItemFromDialog(int &outDamage)
         item->setData(Qt::UserRole, mapping.englishId);
         item->setData(Qt::UserRole + 1, mapping.defaultDamage);
         item->setData(Qt::UserRole + 2, mapping.category); // 存入分类名，用于过滤
+        item->setData(Qt::UserRole + 3, mapping.presetJson);   // <-- 新增：预设 JSON
 
         itemList.addItem(item);
     }
@@ -503,6 +546,7 @@ QString VillagerEditor::selectItemFromDialog(int &outDamage)
         if (QListWidgetItem *item = itemList.currentItem()) {
             selectedId = item->data(Qt::UserRole).toString();
             outDamage = item->data(Qt::UserRole + 1).toInt();
+            outPresetJson = item->data(Qt::UserRole + 3).toString();   // <-- 获取预设 JSON
             dialog.accept();
         }
     };
@@ -808,21 +852,28 @@ void VillagerEditor::createDefaultItemConfig(const QString &path)
     QFile file(path);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&file);
-        out.setEncoding(QStringConverter::Utf8);  // 写入时 (out)
+        out.setEncoding(QStringConverter::Utf8);
         out << "# Minecraft 村民交易物品配置文件\n";
-        out << "# 格式：分类, 英文ID, 中文名, 默认Damage值\n";
+        out << "# 格式：分类, 英文ID, 中文名, 默认Damage值, 预设JSON(可选，必须为数组，且整体用双引号括起来，内部双引号写两次)\n";
+        out << "# 示例：武器, minecraft:diamond_sword, 钻石剑, 32767, \"[{\"\"name\"\":\"\"ench\"\",\"\"value\"\":[{\"\"name\"\":\"\"\"\",\"\"value\"\":[{\"\"name\"\":\"\"id\"\",\"\"value\"\":15,\"\"type\"\":2},{\"\"name\"\":\"\"lvl\"\",\"\"value\"\":5,\"\"type\"\":2}],\"\"type\"\":10}],\"\"type\"\":9}]\"\n";
         out << "# 以 # 开头的行是注释，不会被读取\n\n";
 
-        out << "基础, minecraft:air, 空气, 0\n";
-        out << "矿物, minecraft:emerald, 绿宝石, 0\n";
-        out << "矿物, minecraft:diamond, 钻石, 0\n";
-        out << "矿物, minecraft:iron_ingot, 铁锭, 0\n";
-        out << "矿物, minecraft:gold_ingot, 金锭, 0\n";
-        out << "武器, minecraft:iron_sword, 铁剑, 32767\n";
-        out << "武器, minecraft:diamond_sword, 钻石剑, 32767\n";
-        out << "食物, minecraft:bread, 面包, 0\n";
-        out << "食物, minecraft:apple, 苹果, 0\n";
-        out << "方块, minecraft:chest, 箱子, 0\n";
+        out << "基础, minecraft:air, 空气, 0,\n";
+        out << "矿物, minecraft:emerald, 绿宝石, 0,\n";
+        out << "矿物, minecraft:diamond, 钻石, 0,\n";
+        out << "矿物, minecraft:iron_ingot, 铁锭, 0,\n";
+        out << "矿物, minecraft:gold_ingot, 金锭, 0,\n";
+        out << "武器, minecraft:iron_sword, 铁剑, 32767,\n";
+
+        // 为钻石剑添加预设 JSON，并进行 CSV 转义：整体加双引号，内部双引号替换为两个
+        QString rawJson = "[{\"name\":\"ench\",\"value\":[{\"name\":\"\",\"value\":[{\"name\":\"id\",\"value\":15,\"type\":2},{\"name\":\"lvl\",\"value\":5,\"type\":2}],\"type\":10}],\"type\":9}]";
+        QString escapedJson = rawJson;
+        escapedJson.replace("\"", "\"\""); // 将每个双引号替换为两个双引号
+        out << "武器, minecraft:diamond_sword, 钻石剑, 32767, \"" << escapedJson << "\"\n";
+
+        out << "食物, minecraft:bread, 面包, 0,\n";
+        out << "食物, minecraft:apple, 苹果, 0,\n";
+        out << "方块, minecraft:chest, 箱子, 0,\n";
         file.close();
     }
 }
@@ -831,30 +882,35 @@ void VillagerEditor::createDefaultItemConfig(const QString &path)
 QList<ItemMapping> VillagerEditor::loadItemMappings()
 {
     QList<ItemMapping> items;
-    // 配置文件存放在可执行文件同级目录
     QString path = QCoreApplication::applicationDirPath() + "/items_config.csv";
     QFile file(path);
 
-    // 如果文件不存在，则自动创建一个默认的
     if (!file.exists()) {
         createDefaultItemConfig(path);
     }
 
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
-        in.setEncoding(QStringConverter::Utf8);   // 读取时 (in)
+        in.setEncoding(QStringConverter::Utf8);
         while (!in.atEnd()) {
             QString line = in.readLine().trimmed();
-            // 跳过空行和注释
-            if (line.isEmpty() || line.startsWith("#")) continue;
+            if (line.isEmpty() || line.startsWith('#')) continue;
 
-            QStringList parts = line.split(",");
+            QList<QString> parts = parseCsvLine(line);  // 使用新解析函数
             if (parts.size() >= 4) {
                 ItemMapping mapping;
                 mapping.category = parts[0].trimmed();
                 mapping.englishId = parts[1].trimmed();
                 mapping.chineseName = parts[2].trimmed();
                 mapping.defaultDamage = parts[3].trimmed().toInt();
+                // 读取第五列（预设 JSON），如果有的话
+                if (parts.size() >= 5) {
+                    mapping.presetJson = parts[4].trimmed();
+                    // 注意：parseCsvLine 已经去除了外层引号，并处理了双引号转义（两个双引号->一个）
+                    // 所以直接赋值即可
+                } else {
+                    mapping.presetJson.clear();
+                }
                 items.append(mapping);
             }
         }
@@ -871,9 +927,9 @@ void VillagerEditor::openItemConfigEditor()
     dialog.resize(600, 500);
     QVBoxLayout layout(&dialog);
 
-    QLabel *helpLabel = new QLabel("<b>配置格式：</b> 分类, 英文ID, 中文名, Damage<br>"
-                                   "<b>示例：</b> <code>矿物, minecraft:emerald, 绿宝石, 0</code><br>"
-                                   "<font color='gray'>修改后点击保存即可全局生效。你可以随时添加 Mod 物品。</font>", &dialog);
+    QLabel *helpLabel = new QLabel("<b>配置格式：</b> 分类, 英文ID, 中文名, Damage, 预设JSON<br>"
+                                   "<b>示例：</b> <code>武器, minecraft:diamond_sword, 钻石剑, 32767, \"[{\"\"name\"\":\"\"ench\"\",...}]\"</code><br>"
+                                   "<font color='gray'>注意：如果预设JSON中包含逗号或双引号，必须用双引号括起来，且内部的每个双引号写两次（如 \"\" ）。</font>", &dialog);
     layout.addWidget(helpLabel);
 
     // 文本编辑区

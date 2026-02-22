@@ -11,3 +11,5 @@ HEADERS += \
 # 生成可执行文件
 TARGET = VillagerTradeEditor
 DESTDIR = ./bin
+RESOURCES += resources.qrc
+RC_ICONS = resources/icons/VillagerTradeEditor.ico
