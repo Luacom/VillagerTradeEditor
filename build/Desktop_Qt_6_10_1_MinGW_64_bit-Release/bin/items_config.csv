@@ -9,7 +9,7 @@
 矿物, minecraft:iron_ingot, 铁锭, 0,
 矿物, minecraft:gold_ingot, 金锭, 0,
 武器, minecraft:iron_sword, 铁剑, 32767,
-武器, minecraft:diamond_sword, 钻石剑, 32767, "[{""name"":""ench"",""value"":[{""name"":"""",""value"":[{""name"":""id"",""value"":15,""type"":2},{""name"":""lvl"",""value"":5,""type"":2}],""type"":10}],""type"":9}]"
+武器, minecraft:diamond_sword, 钻石剑, 32767, "[{""name"":""tag"",""type"":10,""value"":[{""name"":""display"",""type"":10,""value"":[{""name"":""Name"",""type"":8,""value"":""自定义名称\n你好\n对""},{""name"":""Lore"",""type"":9,""value"":[{""name"":"""",""type"":8,""value"":""自定义注释""}]}]}]}]"
 食物, minecraft:bread, 面包, 0,
 食物, minecraft:apple, 苹果, 0,
 方块, minecraft:chest, 箱子, 0,

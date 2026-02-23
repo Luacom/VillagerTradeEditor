@@ -62,10 +62,10 @@ struct ItemWidgets {
     QSpinBox *sbDamage;
 
     QCheckBox *cbEnableName;
-    QLineEdit *leDisp;
+    QTextEdit *leDisp;      // 原 QLineEdit*
 
     QCheckBox *cbEnableLore;
-    QLineEdit *leLore;
+    QTextEdit *leLore;      // 原 QLineEdit*
 
     QCheckBox *cbEnableEnch;
     QSpinBox *sbEnchId;
@@ -96,12 +96,14 @@ private slots:
     void onDataChanged();
     void onTagCheckboxToggled();
     void openItemSelector(ItemWidgets *widgets);
+    void onGlobalAttributeChanged(); // <== 新增：职业/变种改变时
 
 private:
     bool validateCustomNodes() const;  // 新增：验证所有自定义节点是否有效
     void initUI();
     QGroupBox* createItemSection(const QString &title, ItemWidgets &widgets);
     void updateTradeTable();
+    void extractGlobalAttributes(const QString &jsonText); // <== 新增函数声明
 
     // 数据同步核心
     void populateUIFromData(const TradeOption &trade);
@@ -129,6 +131,10 @@ private:
     QSpinBox *m_sbMaxUses;
     QSpinBox *m_sbTier;
 
+    // <== 新增：全局属性控件
+    QComboBox *m_cbProfession;
+    QComboBox *m_cbMarkVariant;
+
     ItemWidgets wBuyA;
     ItemWidgets wBuyB;
     ItemWidgets wSell;
@@ -139,6 +145,10 @@ private:
     void updateCompleters();     // 新增：更新输入框的自动补全列表
     QList<ItemMapping> loadItemMappings(); // 修改：从文件加载映射
     void createDefaultItemConfig(const QString &path); // 新增：生成默认配置
+
+    // <== 新增：全局属性数据
+    QString m_profession;   // 职业字符串，不带 '+'，例如 "cartographer"
+    int m_markVariant;      // 变种数值 0-6
 };
 
 #endif // VILLAGEREDITOR_H

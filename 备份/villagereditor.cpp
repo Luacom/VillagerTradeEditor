@@ -11,6 +11,59 @@
 #include <QFile>
 #include <QHeaderView>
 
+// 将JSON文本中的转义序列转换为实际控制字符，用于显示
+static QString unescapeForDisplay(const QString &jsonText) {
+    QString result = jsonText;
+    result.replace("\\n", "\n");
+    result.replace("\\t", "\t");
+    result.replace("\\r", "\r");
+    // 注意：不处理 \\ 和 \"，以免破坏JSON结构
+    return result;
+}
+
+// 将实际控制字符转义为JSON标准转义序列，用于保存
+static QString escapeForJson(const QString &displayText) {
+    QString result = displayText;
+    result.replace("\n", "\\n");
+    result.replace("\t", "\\t");
+    result.replace("\r", "\\r");
+    return result;
+}
+
+// 解析 CSV 行，正确处理引号包围的字段
+static QList<QString> parseCsvLine(const QString &line) {
+    QList<QString> fields;
+    QString field;
+    bool inQuote = false;
+    int i = 0;
+    while (i < line.length()) {
+        QChar c = line[i];
+        if (c == '"' && !inQuote) {
+            // 进入引号模式
+            inQuote = true;
+        } else if (c == '"' && inQuote) {
+            // 可能是双引号转义或结束引号
+            if (i + 1 < line.length() && line[i + 1] == '"') {
+                // 连续两个双引号表示一个转义的双引号
+                field.append('"');
+                i++; // 跳过下一个双引号
+            } else {
+                // 结束引号
+                inQuote = false;
+            }
+        } else if (c == ',' && !inQuote) {
+            // 字段结束
+            fields.append(field);
+            field.clear();
+        } else {
+            field.append(c);
+        }
+        i++;
+    }
+    fields.append(field); // 添加最后一个字段
+    return fields;
+}
+
 // 递归查找指定 name 的 NBT 数组节点，无视嵌套深度
 static QJsonArray findNbtArray(const QJsonArray &arr, const QString &targetName) {
     for (const QJsonValue &v : arr) {
@@ -148,16 +201,21 @@ QGroupBox* VillagerEditor::createItemSection(const QString &title, ItemWidgets &
     // Tag 信息
     w.cbEnableName = new QCheckBox("启用自定义名称", this);
     layout->addWidget(w.cbEnableName, 2, 0, 1, 2);
-    w.leDisp = new QLineEdit(this);
-    layout->addWidget(w.leDisp, 2, 2, 1, 2);
+    w.leDisp = new QTextEdit(this);
+    w.leDisp->setMaximumHeight(60);
+    w.leDisp->setAcceptRichText(false);
+    layout->addWidget(w.leDisp, 3, 0, 1, 4);  // 独占一行
 
     w.cbEnableLore = new QCheckBox("启用注释(Lore)", this);
-    layout->addWidget(w.cbEnableLore, 3, 0, 1, 2);
-    w.leLore = new QLineEdit(this);
-    layout->addWidget(w.leLore, 3, 2, 1, 2);
+    layout->addWidget(w.cbEnableLore, 4, 0, 1, 2);
+    w.leLore = new QTextEdit(this);
+    w.leLore->setMaximumHeight(60);
+    w.leLore->setAcceptRichText(false);
+    layout->addWidget(w.leLore, 5, 0, 1, 4);  // 独占一行
 
+    // 附魔部分（原第4行改为第6行，依此类推）
     w.cbEnableEnch = new QCheckBox("启用附魔", this);
-    layout->addWidget(w.cbEnableEnch, 4, 0, 1, 2);
+    layout->addWidget(w.cbEnableEnch, 6, 0, 1, 2);
     QHBoxLayout *enchLayout = new QHBoxLayout();
     enchLayout->addWidget(new QLabel("ID:"));
     w.sbEnchId = new QSpinBox(this); w.sbEnchId->setRange(0, 255);
@@ -165,14 +223,14 @@ QGroupBox* VillagerEditor::createItemSection(const QString &title, ItemWidgets &
     enchLayout->addWidget(new QLabel("Lvl:"));
     w.sbEnchLvl = new QSpinBox(this); w.sbEnchLvl->setRange(1, 255);
     enchLayout->addWidget(w.sbEnchLvl);
-    layout->addLayout(enchLayout, 4, 2, 1, 2);
+    layout->addLayout(enchLayout, 6, 2, 1, 2);
     // 新增：自定义 NBT 节点
     w.cbEnableCustom = new QCheckBox("启用自定义NBT节点", this);
-    layout->addWidget(w.cbEnableCustom, 5, 0, 1, 4); // 占用整行
+    layout->addWidget(w.cbEnableCustom, 7, 0, 1, 4); // 占用整行
     w.teCustom = new QTextEdit(this);
     w.teCustom->setPlaceholderText("输入JSON数组，例如：\n[{\"name\":\"CanPlaceOn\",\"value\":[\"minecraft:grass\"],\"type\":9}]");
     w.teCustom->setMaximumHeight(100);
-    layout->addWidget(w.teCustom, 6, 0, 1, 4);
+    layout->addWidget(w.teCustom, 8, 0, 1, 4);
     w.teCustom->setVisible(false); // 默认隐藏
 
     // 绑定所有的统一更新事件
@@ -180,8 +238,8 @@ QGroupBox* VillagerEditor::createItemSection(const QString &title, ItemWidgets &
     connect(w.leName, &QLineEdit::textChanged, this, syncSlot);
     connect(w.sbCount, &QSpinBox::valueChanged, this, syncSlot);
     connect(w.sbDamage, &QSpinBox::valueChanged, this, syncSlot);
-    connect(w.leDisp, &QLineEdit::textChanged, this, syncSlot);
-    connect(w.leLore, &QLineEdit::textChanged, this, syncSlot);
+    connect(w.leDisp, &QTextEdit::textChanged, this, syncSlot);
+    connect(w.leLore, &QTextEdit::textChanged, this, syncSlot);
     connect(w.sbEnchId, &QSpinBox::valueChanged, this, syncSlot);
     connect(w.sbEnchLvl, &QSpinBox::valueChanged, this, syncSlot);
 
@@ -259,8 +317,8 @@ void VillagerEditor::populateUIFromData(const TradeOption &trade)
         }
 
         // 设置显示文本（即使被禁用也保留内容）
-        w.leDisp->setText(d.displayName);
-        w.leLore->setText(d.lore);
+        w.leDisp->setPlainText(d.displayName);
+        w.leLore->setPlainText(d.lore);
         w.sbEnchId->setValue(d.enchId);
         w.sbEnchLvl->setValue(d.enchLevel);
 
@@ -274,7 +332,8 @@ void VillagerEditor::populateUIFromData(const TradeOption &trade)
         w.cbEnableCustom->setChecked(d.enableCustom);
         if (d.enableCustom) {
             QJsonDocument doc(d.customNodes);
-            w.teCustom->setPlainText(doc.toJson(QJsonDocument::Indented));
+            QString jsonText = doc.toJson(QJsonDocument::Indented);
+            w.teCustom->setPlainText(unescapeForDisplay(jsonText));  // 转换显示
         } else {
             w.teCustom->clear();
         }
@@ -304,9 +363,9 @@ void VillagerEditor::syncDataFromUI()
         d.count = w.sbCount->value();
         d.damage = w.sbDamage->value();
         d.enableName = w.cbEnableName->isChecked();
-        d.displayName = w.leDisp->text().trimmed();
+        d.displayName = w.leDisp->toPlainText();
+        d.lore = w.leLore->toPlainText();
         d.enableLore = w.cbEnableLore->isChecked();
-        d.lore = w.leLore->text().trimmed();
         d.enableEnch = w.cbEnableEnch->isChecked();
         d.enchId = w.sbEnchId->value();
         d.enchLevel = w.sbEnchLvl->value();
@@ -315,12 +374,14 @@ void VillagerEditor::syncDataFromUI()
         if (d.enableCustom) {
             QString customText = w.teCustom->toPlainText().trimmed();
             if (!customText.isEmpty()) {
+                // 将显示用的实际换行符等转义回JSON标准形式
+                QString escaped = escapeForJson(customText);
                 QJsonParseError err;
-                QJsonDocument doc = QJsonDocument::fromJson(customText.toUtf8(), &err);
+                QJsonDocument doc = QJsonDocument::fromJson(escaped.toUtf8(), &err);
                 if (err.error == QJsonParseError::NoError && doc.isArray()) {
                     d.customNodes = doc.array();
                 } else {
-                    d.customNodes = QJsonArray(); // 解析失败则清空
+                    d.customNodes = QJsonArray();
                 }
             } else {
                 d.customNodes = QJsonArray();
@@ -416,15 +477,23 @@ void VillagerEditor::updateTradeTable()
 void VillagerEditor::openItemSelector(ItemWidgets *widgets)
 {
     int damage = 0;
-    QString itemName = selectItemFromDialog(damage);
+    QString presetJson;
+    QString itemName = selectItemFromDialog(damage, presetJson);
     if (!itemName.isEmpty()) {
         widgets->leName->setText(itemName);
         widgets->sbDamage->setValue(damage);
         if (widgets->sbCount->value() == 0) widgets->sbCount->setValue(1);
+
+        if (!presetJson.isEmpty()) {
+            widgets->cbEnableCustom->setChecked(true);
+            // 将预设JSON中的转义序列转换为实际换行符显示
+            QString displayText = unescapeForDisplay(presetJson);
+            widgets->teCustom->setPlainText(displayText);
+        }
     }
 }
 
-QString VillagerEditor::selectItemFromDialog(int &outDamage)
+QString VillagerEditor::selectItemFromDialog(int &outDamage, QString &outPresetJson)
 {
     QDialog dialog(this);
     dialog.setWindowTitle("选择物品");
@@ -466,6 +535,7 @@ QString VillagerEditor::selectItemFromDialog(int &outDamage)
         item->setData(Qt::UserRole, mapping.englishId);
         item->setData(Qt::UserRole + 1, mapping.defaultDamage);
         item->setData(Qt::UserRole + 2, mapping.category); // 存入分类名，用于过滤
+        item->setData(Qt::UserRole + 3, mapping.presetJson);   // <-- 新增：预设 JSON
 
         itemList.addItem(item);
     }
@@ -503,6 +573,7 @@ QString VillagerEditor::selectItemFromDialog(int &outDamage)
         if (QListWidgetItem *item = itemList.currentItem()) {
             selectedId = item->data(Qt::UserRole).toString();
             outDamage = item->data(Qt::UserRole + 1).toInt();
+            outPresetJson = item->data(Qt::UserRole + 3).toString();   // <-- 获取预设 JSON
             dialog.accept();
         }
     };
@@ -536,9 +607,16 @@ QJsonObject VillagerEditor::buildTagNbt(const ItemData &data)
     if (data.enableName || data.enableLore) {
         QJsonArray displayArr;
         if (data.enableName) displayArr.append(createNode("Name", data.displayName, 8));
-        if (data.enableLore) {
-            QJsonArray loreArr; loreArr.append(createNode("", data.lore, 8));
-            displayArr.append(createNode("Lore", loreArr, 9));
+
+        if (data.enableLore && !data.lore.isEmpty()) {
+            QJsonArray loreArr;
+            QStringList lines = data.lore.split('\n', Qt::SkipEmptyParts);
+            for (const QString &line : lines) {
+                loreArr.append(createNode("", line, 8));
+            }
+            if (!loreArr.isEmpty()) {
+                displayArr.append(createNode("Lore", loreArr, 9));
+            }
         }
         tagArr.append(createNode("display", displayArr, 10));
     }
@@ -621,7 +699,7 @@ QString VillagerEditor::serializeNbtData(const QList<TradeOption> &trades)
 
     // 头尾硬编码保护格式绝对正确 (保留你原本的长字符串)
     QString fixedHead = "{\"name\":\"\",\"value\":[{\"name\":\"format_version\",\"value\":1,\"type\":3},{\"name\":\"size\",\"value\":[{\"name\":\"\",\"value\":1,\"type\":3},{\"name\":\"\",\"value\":1,\"type\":3},{\"name\":\"\",\"value\":1,\"type\":3}],\"type\":9},{\"name\":\"structure\",\"value\":[{\"name\":\"block_indices\",\"value\":[{\"name\":\"\",\"value\":[{\"name\":\"\",\"value\":-1,\"type\":3}],\"type\":9},{\"name\":\"\",\"value\":[{\"name\":\"\",\"value\":-1,\"type\":3}],\"type\":9}],\"type\":9},{\"name\":\"entities\",\"value\":[{\"name\":\"\",\"value\":[{\"name\":\"Air\",\"value\":300,\"type\":2},{\"name\":\"Armor\",\"value\":[{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10}],\"type\":9},{\"name\":\"Attributes\",\"value\":[{\"name\":\"\",\"value\":[{\"name\":\"Base\",\"value\":20.0,\"type\":5},{\"name\":\"Current\",\"value\":20.0,\"type\":5},{\"name\":\"DefaultMax\",\"value\":20.0,\"type\":5},{\"name\":\"DefaultMin\",\"value\":0.0,\"type\":5},{\"name\":\"Max\",\"value\":20.0,\"type\":5},{\"name\":\"Min\",\"value\":0.0,\"type\":5},{\"name\":\"Name\",\"value\":\"minecraft:health\",\"type\":8}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Base\",\"value\":128.0,\"type\":5},{\"name\":\"Current\",\"value\":128.0,\"type\":5},{\"name\":\"DefaultMax\",\"value\":2048.0,\"type\":5},{\"name\":\"DefaultMin\",\"value\":0.0,\"type\":5},{\"name\":\"Max\",\"value\":2048.0,\"type\":5},{\"name\":\"Min\",\"value\":0.0,\"type\":5},{\"name\":\"Name\",\"value\":\"minecraft:follow_range\",\"type\":8}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Base\",\"value\":0.0,\"type\":5},{\"name\":\"Current\",\"value\":0.0,\"type\":5},{\"name\":\"DefaultMax\",\"value\":1.0,\"type\":5},{\"name\":\"DefaultMin\",\"value\":0.0,\"type\":5},{\"name\":\"Max\",\"value\":1.0,\"type\":5},{\"name\":\"Min\",\"value\":0.0,\"type\":5},{\"name\":\"Name\",\"value\":\"minecraft:knockback_resistance\",\"type\":8}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Base\",\"value\":0.5,\"type\":5},{\"name\":\"Current\",\"value\":0.5,\"type\":5},{\"name\":\"DefaultMax\",\"value\":3.4028235E38,\"type\":5},{\"name\":\"DefaultMin\",\"value\":0.0,\"type\":5},{\"name\":\"Max\",\"value\":3.4028235E38,\"type\":5},{\"name\":\"Min\",\"value\":0.0,\"type\":5},{\"name\":\"Name\",\"value\":\"minecraft:movement\",\"type\":8}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Base\",\"value\":0.02,\"type\":5},{\"name\":\"Current\",\"value\":0.02,\"type\":5},{\"name\":\"DefaultMax\",\"value\":3.4028235E38,\"type\":5},{\"name\":\"DefaultMin\",\"value\":0.0,\"type\":5},{\"name\":\"Max\",\"value\":3.4028235E38,\"type\":5},{\"name\":\"Min\",\"value\":0.0,\"type\":5},{\"name\":\"Name\",\"value\":\"minecraft:underwater_movement\",\"type\":8}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Base\",\"value\":0.02,\"type\":5},{\"name\":\"Current\",\"value\":0.02,\"type\":5},{\"name\":\"DefaultMax\",\"value\":3.4028235E38,\"type\":5},{\"name\":\"DefaultMin\",\"value\":0.0,\"type\":5},{\"name\":\"Max\",\"value\":3.4028235E38,\"type\":5},{\"name\":\"Min\",\"value\":0.0,\"type\":5},{\"name\":\"Name\",\"value\":\"minecraft:lava_movement\",\"type\":8}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Base\",\"value\":0.0,\"type\":5},{\"name\":\"Current\",\"value\":0.0,\"type\":5},{\"name\":\"DefaultMax\",\"value\":16.0,\"type\":5},{\"name\":\"DefaultMin\",\"value\":0.0,\"type\":5},{\"name\":\"Max\",\"value\":16.0,\"type\":5},{\"name\":\"Min\",\"value\":0.0,\"type\":5},{\"name\":\"Name\",\"value\":\"minecraft:absorption\",\"type\":8}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Base\",\"value\":0.0,\"type\":5},{\"name\":\"Current\",\"value\":0.0,\"type\":5},{\"name\":\"DefaultMax\",\"value\":1024.0,\"type\":5},{\"name\":\"DefaultMin\",\"value\":-1024.0,\"type\":5},{\"name\":\"Max\",\"value\":1024.0,\"type\":5},{\"name\":\"Min\",\"value\":-1024.0,\"type\":5},{\"name\":\"Name\",\"value\":\"minecraft:luck\",\"type\":8}],\"type\":10}],\"type\":9},{\"name\":\"ChestItems\",\"value\":[{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"Slot\",\"value\":0,\"type\":1},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"Slot\",\"value\":1,\"type\":1},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"Slot\",\"value\":2,\"type\":1},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"Slot\",\"value\":3,\"type\":1},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"Slot\",\"value\":4,\"type\":1},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"Slot\",\"value\":5,\"type\":1},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"Slot\",\"value\":6,\"type\":1},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10},{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"Slot\",\"value\":7,\"type\":1},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10}],\"type\":9},{\"name\":\"Chested\",\"value\":0,\"type\":1},{\"name\":\"Color\",\"value\":0,\"type\":1},{\"name\":\"Color2\",\"value\":0,\"type\":1},{\"name\":\"Dead\",\"value\":0,\"type\":1},{\"name\":\"DeathTime\",\"value\":0,\"type\":2},{\"name\":\"DwellingUniqueID\",\"value\":\"00000000-0000-0000-0000-000000000000\",\"type\":8},{\"name\":\"FallDistance\",\"value\":0.0,\"type\":5},{\"name\":\"HighTierCuredDiscount\",\"value\":0,\"type\":3},{\"name\":\"HurtTime\",\"value\":0,\"type\":2},{\"name\":\"InventoryVersion\",\"value\":\"1.21.132\",\"type\":8},{\"name\":\"Invulnerable\",\"value\":0,\"type\":1},{\"name\":\"IsAngry\",\"value\":0,\"type\":1},{\"name\":\"IsAutonomous\",\"value\":0,\"type\":1},{\"name\":\"IsBaby\",\"value\":0,\"type\":1},{\"name\":\"IsEating\",\"value\":0,\"type\":1},{\"name\":\"IsGliding\",\"value\":0,\"type\":1},{\"name\":\"IsGlobal\",\"value\":0,\"type\":1},{\"name\":\"IsIllagerCaptain\",\"value\":0,\"type\":1},{\"name\":\"IsInRaid\",\"value\":0,\"type\":1},{\"name\":\"IsOrphaned\",\"value\":0,\"type\":1},{\"name\":\"IsOutOfControl\",\"value\":0,\"type\":1},{\"name\":\"IsPregnant\",\"value\":0,\"type\":1},{\"name\":\"IsRoaring\",\"value\":0,\"type\":1},{\"name\":\"IsScared\",\"value\":0,\"type\":1},{\"name\":\"IsStunned\",\"value\":0,\"type\":1},{\"name\":\"IsSwimming\",\"value\":0,\"type\":1},{\"name\":\"IsTamed\",\"value\":0,\"type\":1},{\"name\":\"IsTrusting\",\"value\":0,\"type\":1},{\"name\":\"LeasherID\",\"value\":\"-1\",\"type\":4},{\"name\":\"LootDropped\",\"value\":0,\"type\":1},{\"name\":\"LowTierCuredDiscount\",\"value\":0,\"type\":3},{\"name\":\"Mainhand\",\"value\":[{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10}],\"type\":9},{\"name\":\"MarkVariant\",\"value\":0,\"type\":3},{\"name\":\"NaturalSpawn\",\"value\":0,\"type\":1},{\"name\":\"NearbyCuredDiscount\",\"value\":0,\"type\":3},{\"name\":\"NearbyCuredDiscountTimeStamp\",\"value\":0,\"type\":3},";
-    QString fixedFoot = ",{\"name\":\"Offhand\",\"value\":[{\"name\":\"\",\"value\":[{\"name\":\"Count\",\"value\":0,\"type\":1},{\"name\":\"Damage\",\"value\":0,\"type\":2},{\"name\":\"Name\",\"value\":\"\",\"type\":8},{\"name\":\"WasPickedUp\",\"value\":0,\"type\":1}],\"type\":10}],\"type\":9},{\"name\":\"OnGround\",\"value\":1,\"type\":1},{\"name\":\"OwnerNew\",\"value\":\"-1\",\"type\":4},{\"name\":\"Persistent\",\"value\":1,\"type\":1},{\"name\":\"PortalCooldown\",\"value\":0,\"type\":3},{\"name\":\"Pos\",\"value\":[{\"name\":\"\",\"value\":-58.5,\"type\":5},{\"name\":\"\",\"value\":-59.0,\"type\":5},{\"name\":\"\",\"value\":-223.5,\"type\":5}],\"type\":9},{\"name\":\"PreferredProfession\",\"value\":\"cartographer\",\"type\":8},{\"name\":\"ReactToBell\",\"value\":0,\"type\":1},{\"name\":\"RewardPlayersOnFirstFounding\",\"value\":1,\"type\":1},{\"name\":\"Riches\",\"value\":0,\"type\":3},{\"name\":\"Rotation\",\"value\":[{\"name\":\"\",\"value\":97.6936,\"type\":5},{\"name\":\"\",\"value\":39.88098,\"type\":5}],\"type\":9},{\"name\":\"Saddled\",\"value\":0,\"type\":1},{\"name\":\"Sheared\",\"value\":0,\"type\":1},{\"name\":\"ShowBottom\",\"value\":0,\"type\":1},{\"name\":\"Sitting\",\"value\":0,\"type\":1},{\"name\":\"SkinID\",\"value\":2,\"type\":3},{\"name\":\"SlotDropChances\",\"value\":[{\"name\":\"\",\"value\":[{\"name\":\"DropChance\",\"value\":0.0,\"type\":5},{\"name\":\"Slot\",\"value\":\"mainhand\",\"type\":8}],\"type\":10}],\"type\":9},{\"name\":\"Strength\",\"value\":0,\"type\":3},{\"name\":\"StrengthMax\",\"value\":0,\"type\":3},{\"name\":\"Surface\",\"value\":0,\"type\":1},{\"name\":\"Tags\",\"value\":[],\"type\":9},{\"name\":\"TargetID\",\"value\":\"-1\",\"type\":4},{\"name\":\"TradeExperience\",\"value\":0,\"type\":3},{\"name\":\"TradeTier\",\"value\":0,\"type\":3},{\"name\":\"UniqueID\",\"value\":\"-317827579897\",\"type\":4},{\"name\":\"Variant\",\"value\":6,\"type\":3},{\"name\":\"Willing\",\"value\":0,\"type\":1},{\"name\":\"boundX\",\"value\":0,\"type\":3},{\"name\":\"boundY\",\"value\":0,\"type\":3},{\"name\":\"boundZ\",\"value\":0,\"type\":3},{\"name\":\"canPickupItems\",\"value\":0,\"type\":1},{\"name\":\"definitions\",\"value\":[{\"name\":\"\",\"value\":\"+minecraft:villager_v2\",\"type\":8},{\"name\":\"\",\"value\":\"+villager_skin_2\",\"type\":8},{\"name\":\"\",\"value\":\"+adult\",\"type\":8},{\"name\":\"\",\"value\":\"+cartographer\",\"type\":8},{\"name\":\"\",\"value\":\"+basic_schedule\",\"type\":8},{\"name\":\"\",\"value\":\"-job_specific_goals\",\"type\":8}],\"type\":9},{\"name\":\"hasBoundOrigin\",\"value\":0,\"type\":1},{\"name\":\"hasSetCanPickupItems\",\"value\":1,\"type\":1},{\"name\":\"identifier\",\"value\":\"minecraft:villager_v2\",\"type\":8},{\"name\":\"internalComponents\",\"value\":[],\"type\":10}],\"type\":10}],\"type\":9},{\"name\":\"palette\",\"value\":[{\"name\":\"default\",\"value\":[{\"name\":\"block_palette\",\"value\":[],\"type\":9},{\"name\":\"block_position_data\",\"value\":[],\"type\":10}],\"type\":10}],\"type\":10}],\"type\":10},{\"name\":\"structure_world_origin\",\"value\":[{\"name\":\"\",\"value\":-59,\"type\":3},{\"name\":\"\",\"value\":-59,\"type\":3},{\"name\":\"\",\"value\":-224,\"type\":3}],\"type\":9}],\"type\":10}";
+    QString fixedFoot = "";
 
     QJsonDocument doc;
     doc.setObject(offersObj);
@@ -662,7 +740,13 @@ ItemData VillagerEditor::parseItemData(const QJsonArray &arr)
                         } else if (dobj.value("name").toString() == "Lore") {
                             item.enableLore = true;
                             QJsonArray loreArr = dobj.value("value").toArray();
-                            if (!loreArr.isEmpty()) item.lore = loreArr[0].toObject().value("value").toString();
+                            QStringList lines;
+                            for (const QJsonValue &lv : loreArr) {
+                                if (lv.isObject()) {
+                                    lines.append(lv.toObject().value("value").toString());
+                                }
+                            }
+                            item.lore = lines.join('\n');   // 用换行符拼接，用于 UI 显示
                         }
                     }
                 } else if (tn == "ench" && tobj.value("value").isArray()) {
@@ -808,21 +892,28 @@ void VillagerEditor::createDefaultItemConfig(const QString &path)
     QFile file(path);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&file);
-        out.setEncoding(QStringConverter::Utf8);  // 写入时 (out)
+        out.setEncoding(QStringConverter::Utf8);
         out << "# Minecraft 村民交易物品配置文件\n";
-        out << "# 格式：分类, 英文ID, 中文名, 默认Damage值\n";
+        out << "# 格式：分类, 英文ID, 中文名, 默认Damage值, 预设JSON(可选，必须为数组，且整体用双引号括起来，内部双引号写两次)\n";
+        out << "# 示例：武器, minecraft:diamond_sword, 钻石剑, 32767, \"[{\"\"name\"\":\"\"ench\"\",\"\"value\"\":[{\"\"name\"\":\"\"\"\",\"\"value\"\":[{\"\"name\"\":\"\"id\"\",\"\"value\"\":15,\"\"type\"\":2},{\"\"name\"\":\"\"lvl\"\",\"\"value\"\":5,\"\"type\"\":2}],\"\"type\"\":10}],\"\"type\"\":9}]\"\n";
         out << "# 以 # 开头的行是注释，不会被读取\n\n";
 
-        out << "基础, minecraft:air, 空气, 0\n";
-        out << "矿物, minecraft:emerald, 绿宝石, 0\n";
-        out << "矿物, minecraft:diamond, 钻石, 0\n";
-        out << "矿物, minecraft:iron_ingot, 铁锭, 0\n";
-        out << "矿物, minecraft:gold_ingot, 金锭, 0\n";
-        out << "武器, minecraft:iron_sword, 铁剑, 32767\n";
-        out << "武器, minecraft:diamond_sword, 钻石剑, 32767\n";
-        out << "食物, minecraft:bread, 面包, 0\n";
-        out << "食物, minecraft:apple, 苹果, 0\n";
-        out << "方块, minecraft:chest, 箱子, 0\n";
+        out << "基础, minecraft:air, 空气, 0,\n";
+        out << "矿物, minecraft:emerald, 绿宝石, 0,\n";
+        out << "矿物, minecraft:diamond, 钻石, 0,\n";
+        out << "矿物, minecraft:iron_ingot, 铁锭, 0,\n";
+        out << "矿物, minecraft:gold_ingot, 金锭, 0,\n";
+        out << "武器, minecraft:iron_sword, 铁剑, 32767,\n";
+
+        // 为钻石剑添加预设 JSON，并进行 CSV 转义：整体加双引号，内部双引号替换为两个
+        QString rawJson = "[{\"name\":\"ench\",\"value\":[{\"name\":\"\",\"value\":[{\"name\":\"id\",\"value\":15,\"type\":2},{\"name\":\"lvl\",\"value\":5,\"type\":2}],\"type\":10}],\"type\":9}]";
+        QString escapedJson = rawJson;
+        escapedJson.replace("\"", "\"\""); // 将每个双引号替换为两个双引号
+        out << "武器, minecraft:diamond_sword, 钻石剑, 32767, \"" << escapedJson << "\"\n";
+
+        out << "食物, minecraft:bread, 面包, 0,\n";
+        out << "食物, minecraft:apple, 苹果, 0,\n";
+        out << "方块, minecraft:chest, 箱子, 0,\n";
         file.close();
     }
 }
@@ -831,30 +922,35 @@ void VillagerEditor::createDefaultItemConfig(const QString &path)
 QList<ItemMapping> VillagerEditor::loadItemMappings()
 {
     QList<ItemMapping> items;
-    // 配置文件存放在可执行文件同级目录
     QString path = QCoreApplication::applicationDirPath() + "/items_config.csv";
     QFile file(path);
 
-    // 如果文件不存在，则自动创建一个默认的
     if (!file.exists()) {
         createDefaultItemConfig(path);
     }
 
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
-        in.setEncoding(QStringConverter::Utf8);   // 读取时 (in)
+        in.setEncoding(QStringConverter::Utf8);
         while (!in.atEnd()) {
             QString line = in.readLine().trimmed();
-            // 跳过空行和注释
-            if (line.isEmpty() || line.startsWith("#")) continue;
+            if (line.isEmpty() || line.startsWith('#')) continue;
 
-            QStringList parts = line.split(",");
+            QList<QString> parts = parseCsvLine(line);  // 使用新解析函数
             if (parts.size() >= 4) {
                 ItemMapping mapping;
                 mapping.category = parts[0].trimmed();
                 mapping.englishId = parts[1].trimmed();
                 mapping.chineseName = parts[2].trimmed();
                 mapping.defaultDamage = parts[3].trimmed().toInt();
+                // 读取第五列（预设 JSON），如果有的话
+                if (parts.size() >= 5) {
+                    mapping.presetJson = parts[4].trimmed();
+                    // 注意：parseCsvLine 已经去除了外层引号，并处理了双引号转义（两个双引号->一个）
+                    // 所以直接赋值即可
+                } else {
+                    mapping.presetJson.clear();
+                }
                 items.append(mapping);
             }
         }
@@ -871,12 +967,13 @@ void VillagerEditor::openItemConfigEditor()
     dialog.resize(600, 500);
     QVBoxLayout layout(&dialog);
 
-    QLabel *helpLabel = new QLabel("<b>配置格式：</b> 分类, 英文ID, 中文名, Damage<br>"
-                                   "<b>示例：</b> <code>矿物, minecraft:emerald, 绿宝石, 0</code><br>"
-                                   "<font color='gray'>修改后点击保存即可全局生效。你可以随时添加 Mod 物品。</font>", &dialog);
+    QLabel *helpLabel = new QLabel(
+        "<b>配置格式：</b> 分类, 英文ID, 中文名, Damage, 预设JSON<br>"
+        "<b>示例：</b> <code>武器, minecraft:diamond_sword, 钻石剑, 32767, \"[{\"\"name\"\":\"\"ench\"\",...}]\"</code><br>"
+        "<font color='gray'>注意：如果预设JSON中包含逗号或双引号，必须用双引号括起来，且内部的每个双引号写两次（如 \"\" ）。<br>"
+        "可使用下方的转换按钮将普通JSON快速转换为CSV兼容格式。</font>", &dialog);
     layout.addWidget(helpLabel);
 
-    // 文本编辑区
     QTextEdit *editor = new QTextEdit(&dialog);
     editor->setStyleSheet("font-family: Consolas, monospace; font-size: 14px;");
 
@@ -888,32 +985,77 @@ void VillagerEditor::openItemConfigEditor()
     }
     layout.addWidget(editor);
 
-    // 底部按钮
     QHBoxLayout *btnLayout = new QHBoxLayout();
     QPushButton *btnSave = new QPushButton("保存并刷新", &dialog);
     QPushButton *btnCancel = new QPushButton("取消", &dialog);
+    QPushButton *btnConvert = new QPushButton("转换选中JSON为CSV格式", &dialog);
     btnLayout->addStretch();
+    btnLayout->addWidget(btnConvert);
     btnLayout->addWidget(btnSave);
     btnLayout->addWidget(btnCancel);
     layout.addLayout(btnLayout);
+    //转换
+    connect(btnConvert, &QPushButton::clicked, [&]() {
+        QTextCursor cursor = editor->textCursor();
+        QString selected = cursor.selectedText();
+        if (selected.isEmpty()) {
+            QMessageBox::information(&dialog, "提示", "请先选中要转换的JSON文本。");
+            return;
+        }
 
-    // 保存逻辑
-    connect(btnSave, &QPushButton::clicked, [&]() {
+        // Qt的selectedText使用段落分隔符(U+2029)表示换行，转换为普通换行符
+        selected.replace(QChar(0x2029), '\n');
+
+        QString toConvert;
+
+        // 尝试解析为JSON对象或数组
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(selected.toUtf8(), &err);
+        if (err.error == QJsonParseError::NoError && (doc.isArray() || doc.isObject())) {
+            // 成功解析，压缩为单行紧凑格式（自动处理转义）
+            toConvert = doc.toJson(QJsonDocument::Compact);
+        } else {
+            // 不是完整JSON，将其作为普通字符串，通过JSON序列化获得转义后的字符串内容
+            QJsonArray arr;
+            arr.append(selected);
+            QJsonDocument arrDoc(arr);
+            QString arrJson = arrDoc.toJson(QJsonDocument::Compact);
+            // arrJson 格式为 ["..."]，提取中间的转义字符串
+            if (arrJson.size() >= 4) {
+                // 去掉开头的 [" 和结尾的 "]
+                toConvert = arrJson.mid(2, arrJson.size() - 4);
+            } else {
+                toConvert = selected;
+            }
+        }
+
+        // CSV转义：每个双引号替换为两个，外层加双引号
+        QString escaped = toConvert;
+        escaped.replace("\"", "\"\"");
+        QString result = "\"" + escaped + "\"";
+
+        cursor.insertText(result);
+    });
+
+    // 保存功能
+    connect(btnSave, &QPushButton::clicked, [&, this]() {
+        QString content = editor->toPlainText();
+        QString path = QCoreApplication::applicationDirPath() + "/items_config.csv";
+        QFile file(path);
         if (file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
             QTextStream out(&file);
-            out.setEncoding(QStringConverter::Utf8);  // 写入时 (out)
-            out << editor->toPlainText();
+            out.setEncoding(QStringConverter::Utf8);
+            out << content;
             file.close();
 
-            // 保存后立刻刷新自动补全列表
-            updateCompleters();
-
+            updateCompleters();   // 刷新自动补全
             dialog.accept();
             QMessageBox::information(this, "成功", "物品库配置已更新并生效！");
         } else {
             QMessageBox::warning(this, "错误", "无法保存文件，请检查权限！");
         }
     });
+
     connect(btnCancel, &QPushButton::clicked, &dialog, &QDialog::reject);
 
     dialog.exec();
